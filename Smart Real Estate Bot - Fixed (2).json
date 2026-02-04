@@ -1,0 +1,2806 @@
+{
+  "name": "Smart Real Estate Bot - Fixed",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "*"
+        ],
+        "additionalFields": {}
+      },
+      "id": "7f5ffb4d-4d15-48c0-a278-4d4c4dc4db19",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -5616,
+        2240
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse incoming Telegram message\nif (!$json.message?.text || $json.message.from?.is_bot) {\n  return [];\n}\n\nconst text = $json.message.text.trim();\nconst textLower = text.toLowerCase();\n\n// Extract user info\nconst name = `${$json.message.from.first_name || ''} ${$json.message.from.last_name || ''}`.trim();\nconst chat_id = $json.message.chat.id;\nconst user_id = $json.message.from.id;\n\n// Extract email if present\nconst emailMatch = text.match(/\\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}\\b/);\nconst email = emailMatch ? emailMatch[0].toLowerCase() : null;\n\n// Extract BHK\nconst bhkMatch = textLower.match(/(\\d+)\\s*bhk/);\nconst bhk = bhkMatch ? parseInt(bhkMatch[1]) : null;\n\n// Extract location keywords\nconst locationMatch = text.match(/\\b(?:in|at|near)\\s+([a-zA-Z\\s]+?)(?:$|,|\\.|\\?|for|with|bhk)/i);\nconst location = locationMatch ? locationMatch[1].trim() : null;\n\n// Extract property type\nlet property_type = null;\nif (textLower.includes('villa')) property_type = 'villa';\nelse if (textLower.includes('apartment') || textLower.includes('flat')) property_type = 'apartment';\nelse if (textLower.includes('house')) property_type = 'house';\nelse if (textLower.includes('plot')) property_type = 'plot';\n\nreturn [{\n  json: {\n    chat_id,\n    user_id,\n    name,\n    message: text,\n    email,\n    bhk,\n    location,\n    property_type,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "7e06bd28-632a-4635-80c9-035ecb246a9a",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5440,
+        2240
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "You are an intent classifier for a real estate chatbot.\n\n**User Message:** {{ $json.message }}\n\n**Detected Data:**\n- BHK: {{ $json.bhk || 'None' }}\n- Location: {{ $json.location || 'None' }}\n- Email: {{ $json.email || 'None' }}\n- Property Type: {{ $json.property_type || 'None' }}\n\n**Classify the intent into ONE of these:**\n\n1. **GREETING** - Hi, hello, hey, good morning, etc.\n2. **SEARCH_PROPERTY** - User wants to find/search properties (has BHK or location or both)\n3. **PROVIDE_INFO** - User provides BHK, location, or property type\n4. **PROVIDE_EMAIL** - User shares email address\n5. **EMAIL_CONSENT_YES** - User agrees to receive email (yes, sure, ok, send it)\n6. **EMAIL_CONSENT_NO** - User declines email (no, not now)\n7. **ASK_QUESTION** - User asks questions about properties\n8. **THANK_YOU** - Thanks, thank you\n9. **OTHER** - Anything else\n\n**Decision Logic:**\n- If message is greeting ONLY → GREETING\n- If message has BHK OR location → SEARCH_PROPERTY\n- If message is \"yes\"/\"sure\"/\"ok\" after showing properties → EMAIL_CONSENT_YES\n- If email address detected → PROVIDE_EMAIL\n- If asking questions → ASK_QUESTION\n\n**Respond with JSON only (no markdown):**\n\n{\n  \"intent\": \"INTENT_NAME\",\n  \"confidence\": \"high|medium|low\",\n  \"needs_more_info\": true/false,\n  \"missing\": [\"bhk\", \"location\", \"email\"] or []\n}\n\n**Examples:**\n\nMessage: \"Hi\"\nResponse: {\"intent\": \"GREETING\", \"confidence\": \"high\", \"needs_more_info\": true, \"missing\": [\"bhk\", \"location\"]}\n\nMessage: \"2 BHK in Mumbai\"\nResponse: {\"intent\": \"SEARCH_PROPERTY\", \"confidence\": \"high\", \"needs_more_info\": false, \"missing\": []}\n\nMessage: \"Looking for apartment\"\nResponse: {\"intent\": \"SEARCH_PROPERTY\", \"confidence\": \"high\", \"needs_more_info\": true, \"missing\": [\"bhk\", \"location\"]}\n\nMessage: \"yes send details\"\nResponse: {\"intent\": \"EMAIL_CONSENT_YES\", \"confidence\": \"high\", \"needs_more_info\": true, \"missing\": [\"email\"]}\n\nMessage: \"test@gmail.com\"\nResponse: {\"intent\": \"PROVIDE_EMAIL\", \"confidence\": \"high\", \"needs_more_info\": false, \"missing\": []}\n\nNow classify:"
+        }
+      },
+      "id": "500b22b8-bc8e-44d9-8513-2b814bbc9d54",
+      "name": "AI Intent Classifier",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -5280,
+        2240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI intent response\nconst aiOutput = $input.item.json.output || $input.item.json.text || '{}';\nconst parsedData = $('Parse Message').item.json;\n\nlet intentData;\ntry {\n  const cleaned = aiOutput.replace(/```json\\n?/g, '').replace(/```/g, '').trim();\n  intentData = JSON.parse(cleaned);\n} catch (e) {\n  console.error('Failed to parse intent:', aiOutput);\n  intentData = {\n    intent: 'OTHER',\n    confidence: 'low',\n    needs_more_info: true,\n    missing: ['bhk', 'location']\n  };\n}\n\nreturn [{\n  json: {\n    ...parsedData,\n    intent: intentData.intent,\n    confidence: intentData.confidence,\n    needs_more_info: intentData.needs_more_info,\n    missing_info: intentData.missing || []\n  }\n}];"
+      },
+      "id": "ddabe298-8494-4536-ab51-8bf22bbd5cb6",
+      "name": "Parse Intent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5008,
+        2240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.intent }}",
+              "value2": "PROPERTY"
+            },
+            {
+              "value1": "={{ $json.intent }}",
+              "value2": "=GREETINGS"
+            }
+          ]
+        }
+      },
+      "id": "7ee216d8-586a-444d-bdd1-18a8363c2ccf",
+      "name": "Is Greeting?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -4208,
+        2608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.item.json;\n\nconst name = data.name \n  ? data.name.split(' ')[0] \n  : 'there';\n\nconst response = `Hello ${name}! 👋\n\nI'm your real estate assistant. I can help you find properties.\n\nWhat type of property are you looking for?\n\n🏠 Apartment\n🏡 Villa\n🏘️ House\n📐 Plot\n\nYou can also tell me directly, like:\n\"2 BHK apartment in Mumbai\"`;\n\nreturn [{\n  json: {\n    ...data,\n    output: response,\n    conversation_stage: 'greeted'\n  }\n}];\n"
+      },
+      "id": "ac445dca-3078-43fd-9004-8e28b6e1703f",
+      "name": "Handle Greeting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4304,
+        2832
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $('Parse Message').item.json.bhk }}",
+              "operation": "isNotEmpty"
+            }
+          ],
+          "string": [
+            {
+              "value1": "={{ $('Store Property Inquiry').item.json.fields.city }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "fbe94ec7-c800-4ce5-866e-616fd7e13fdc",
+      "name": "Ready to Search?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -3936,
+        2528
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Parse Message').item.json.message }}",
+        "options": {
+          "systemMessage": "You are a friendly real estate assistant collecting property requirements.\n\n**User:** {{ $json.name }}\n**Current Intent:** {{ $json.intent }}\n\n**What we have:**\n- BHK: {{ $json.bhk || 'Not provided' }}\n- Location: {{ $json.location || 'Not provided' }}\n- Property Type: {{ $json.property_type || 'Not provided' }}\n\n**What we need:** {{ $json.missing_info.join(', ') || 'Nothing more!' }}\n\n**Your task:** Ask for the NEXT missing piece of information in a friendly way.\n\n**Rules:**\n1. Ask for ONE thing at a time\n2. Be conversational and warm\n3. If BHK is missing, ask: \"How many bedrooms (BHK) would you like? (e.g., 1 BHK, 2 BHK, 3 BHK)\"\n4. If location is missing, ask: \"Which area or city are you interested in?\"\n5. Keep it short (1-2 sentences)\n6. Use emojis appropriately\n\n**Current message:** {{ $json.message }}\n\nRespond naturally:"
+        }
+      },
+      "id": "7df3c59c-d71f-45c2-a747-7971df0817b2",
+      "name": "Collect Missing Info",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -3696,
+        2784
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {}
+      },
+      "id": "91f11082-3338-40b2-aa7d-49b0f6638c72",
+      "name": "Groq Collect",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3680,
+        2944
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit?pli=1&gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Properties ",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit#gid=0"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "BHK",
+              "lookupValue": "={{ $json.fields.BHK }}"
+            },
+            {
+              "lookupColumn": "City",
+              "lookupValue": "={{ $json.fields.city }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "09bd3863-9cb5-40b4-91c5-15372421ba9a",
+      "name": "Search Properties",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -3664,
+        2400
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "jYyBT144uOLlhO2o",
+          "name": "Google Sheets account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format search results\nconst searchData = $('Ready to Search?').item.json;\nconst items = $input.all();\n\n// Check if we have results\nif (!items || items.length === 0 || !items[0].json.BHK) {\n  return [{\n    json: {\n      ...searchData,\n      has_results: false,\n      properties: [],\n      property_count: 0\n    }\n  }];\n}\n\n// Format properties\nconst properties = items.map(item => ({\n  bhk: item.json.BHK,\n  type: item.json.Type || 'Property',\n  location: item.json.City,\n  area: item.json.Area,\n  price: item.json.Price,\n  status: item.json.Status || 'Available',\n  agent: item.json['Listing Agent'] || 'Agent'\n}));\n\nreturn [{\n  json: {\n    ...searchData,\n    has_results: true,\n    properties: properties,\n    property_count: properties.length,\n    properties_json: JSON.stringify(properties, null, 2)\n  }\n}];"
+      },
+      "id": "94843e3c-435e-46cc-ab71-f409adda36e0",
+      "name": "Format Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3472,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.has_results }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "059169c6-49d3-4ab1-91a9-f300646cad62",
+      "name": "Has Results?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -3312,
+        2384
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Format Results').item.json.properties }}",
+        "options": {
+          "systemMessage": "=You are presenting property search results to a user.\n\n{{ $json.properties_json }}\n**Present the results in this format:**\n\n\"Great news,\\n\\nI found {{ $json.property_count }} propert{{ $json.property_count > 1 ? 'ies' : 'y' }} matching your search:\\n\\n[For each property:]\\n🏠 **BHK {{ type }}**\\n📍 Location: {{ location }}\\n📏 Area: {{ area }}\\n💰 Price: {{ price }}\\n✅ Status: {{ status }}\\n\\n[After all properties:]\\nWould you like me to email you these details?\"\n\n**Rules:**\n- Be enthusiastic\n- Format clearly with emojis\n- List all properties\n- End by asking if they want email\n- Keep professional but friendly\n\nNow present the properties:"
+        }
+      },
+      "id": "3b98b507-cb15-496b-a10c-a0bdaa45045f",
+      "name": "Present Found Properties",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -3184,
+        2208
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {}
+      },
+      "id": "567b737a-00cd-4471-ab30-f7de855f4f1e",
+      "name": "Groq Present",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3152,
+        2384
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Parse Intent').item.json.name }}",
+        "options": {
+          "systemMessage": "=No properties were found for the user's search.\n\n**User:** \n**Search:**  {{ $json.fields.BHK }} BHK in {{ $json.fields.city }}\n**Create a response that:**\n1. Apologizes empathetically\n2. Explains no properties are currently available\n3. Offers to notify them by email when properties become available\n4. Asks for their email address\n\n**Format:**\n\n\"Hi, {{ $('Parse Intent').item.json.name }} \\n\\nI'm sorry, but I couldn't find any  {{ $('Parse Intent').item.json.bhk }} BHK {{ $('Parse Intent').item.json.property_type }} properties in {{ $('Parse Intent').item.json.location }} at the moment.\\n\\nHowever, I can notify you by email as soon as new properties matching your requirements become available! 📧\\n\\nWould you like that? If yes, please share your email address.\\n\\nAlternatively, would you like to:\\n• Try a different location?\\n• Look for a different BHK?\"\n\n**Rules:**\n- Be empathetic\n- Offer value (email notifications)\n- Provide alternatives\n- Keep hopeful tone\n\nRespond now:"
+        }
+      },
+      "id": "2888f711-f15b-456c-a615-7b6b4e0b61a9",
+      "name": "Present No Results",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -3120,
+        2512
+      ]
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {}
+      },
+      "id": "d254bbc0-1a12-4915-9fd2-ef0136845b99",
+      "name": "Groq None",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3216,
+        2672
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ensure output field exists\nconst data = $input.item.json;\n\nreturn [{\n  json: {\n    ...data,\n    properties_shown: true,\n    conversation_stage: 'properties_shown'\n  }\n}];"
+      },
+      "id": "92d06fab-754f-4052-a46d-c17cd8c9cb29",
+      "name": "Mark Shown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2880,
+        2208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ensure output field exists\nconst data = $input.item.json;\n\nreturn [{\n  json: {\n    ...data,\n    properties_shown: false,\n    conversation_stage: 'no_properties_found'\n  }\n}];"
+      },
+      "id": "d207f3c8-2c5a-41c1-bd92-f4f13eea974d",
+      "name": "Mark None Found",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2736,
+        2480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $('Parse Message').item.json.email }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "961fcc0e-2bc1-488c-8e28-f65e44e8ace6",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -5008,
+        1872
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// User provided email - send confirmation\nconst data = $input.item.json;\n\nlet response;\n\nif (data.has_results && data.properties) {\n  // Had properties - send them\n  response = `Perfect! ✅\\n\\nI've saved your email: ${data.email}\\n\\nI'll send you the property details shortly. You can also expect notifications when new properties matching your criteria become available! 📧✨`;\n} else {\n  // No properties - just confirmation\n  response = `Perfect! ✅\\n\\nI've saved your email: ${data.email}\\n\\nI'll notify you as soon as we have properties matching your requirements:\\n• ${data.bhk} BHK\\n• ${data.location}\\n\\nYou'll be the first to know! 📧✨`;\n}\n\nreturn [{\n  json: {\n    ...data,\n    output: response,\n    conversation_stage: 'email_collected',\n    should_send_email: data.has_results || false\n  }\n}];"
+      },
+      "id": "6d49ace9-5b4e-48c0-bedb-91dcc3ec1f07",
+      "name": "Confirm Email Saved",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4192,
+        1712
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ask for email address\nconst data = $input.item.json;\n\nconst response = `Great! 😊\\n\\nPlease share your email address so I can send you the details.\\n\\nJust type it like: yourname@example.com`;\n\nreturn [{\n  json: {\n    ...data,\n    output: response,\n    conversation_stage: 'asking_for_email'\n  }\n}];"
+      },
+      "id": "6bcc324c-2327-43ef-b031-9ce5d99a579d",
+      "name": "Ask for Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4976,
+        1728
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "app0Uho8WKMaMKeQD",
+          "mode": "list",
+          "cachedResultName": "Buyer Notify"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblZ0ILrNSJmmQk2x",
+          "mode": "list",
+          "cachedResultName": "Buyers"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "={{ $json.user_id }}",
+            "name": "={{ $json.name }}",
+            "email": "={{ $json.email }}",
+            "city": "={{ $json.location }}",
+            "BHK": "={{ $json.bhk }}",
+            "Property Type ": "={{ $json.property_type }}",
+            "Conversation Stage  ": "={{ $json.conversation_stage }}",
+            "chat ID": "={{ $json.chat_id }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "BHK",
+              "displayName": "BHK",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Stage ",
+              "displayName": "Stage ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Property Type ",
+              "displayName": "Property Type ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": " User Email",
+              "displayName": " User Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "wants email consent ",
+              "displayName": "wants email consent ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Conversation Stage  ",
+              "displayName": "Conversation Stage  ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "chat ID",
+              "displayName": "chat ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "d45c7339-6765-45d4-96aa-7c18cc79b5f5",
+      "name": "Save to Airtable",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -4112,
+        2832
+      ],
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "FbWtMONkHmjNLHub",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Store Property Inquiry').item.json.fields['chat ID'] }}",
+        "text": "={{ $('Handle Greeting').item.json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "c263b9b7-f5d1-4c8b-9440-5e1fd730ce9c",
+      "name": "Send Telegram Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -3952,
+        2832
+      ],
+      "webhookId": "287ca066-db93-458c-95c9-58bc095119ee",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Add output field from AI agent response\nconst data = $input.item.json;\nconst aiOutput = data.output || '';\n\nreturn [{\n  json: {\n    ...data,\n    output: aiOutput,\n    conversation_stage: 'collecting_info'\n  }\n}];"
+      },
+      "id": "41fe43c3-8e34-4dd3-b72d-2a44db353b2b",
+      "name": "Add Output from Collect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3424,
+        2784
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Intent').item.json.chat_id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2976,
+        1424
+      ],
+      "id": "96c19559-bcc1-46eb-8ab8-d3adac0cbd24",
+      "name": "Send a text message1",
+      "webhookId": "41602cac-3707-4a63-9a28-b0a1a33c4a3f",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "app0Uho8WKMaMKeQD",
+          "mode": "list",
+          "cachedResultName": "Buyer Notify ",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblZ0ILrNSJmmQk2x",
+          "mode": "list",
+          "cachedResultName": "Buyers",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD/tblZ0ILrNSJmmQk2x"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "wants email consent ": false,
+            "BHK": "={{ $('Parse Intent').item.json.bhk }}",
+            "chat ID": "={{ $('Parse Intent').item.json.chat_id }}",
+            "name": "={{ $('Parse Intent').item.json.name }}",
+            "id": "=",
+            "city": "={{ $('Parse Intent').item.json.location }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "BHK",
+              "displayName": "BHK",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Stage ",
+              "displayName": "Stage ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Property Type ",
+              "displayName": "Property Type ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": " User Email",
+              "displayName": " User Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "wants email consent ",
+              "displayName": "wants email consent ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Conversation Stage  ",
+              "displayName": "Conversation Stage  ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "chat ID",
+              "displayName": "chat ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -2528,
+        2480
+      ],
+      "id": "9a960a2c-c558-4a50-8151-f4063c52e22e",
+      "name": "Create or update a record2",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "FbWtMONkHmjNLHub",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $('Mark None Found').item.json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2368,
+        2480
+      ],
+      "id": "e4df71fb-d9f8-41d8-859d-0a95651cbaff",
+      "name": "Send a text message2",
+      "webhookId": "451f6aba-c755-4010-87ad-c919395d690f",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "app0Uho8WKMaMKeQD",
+          "mode": "list",
+          "cachedResultName": "Buyer Notify ",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblZ0ILrNSJmmQk2x",
+          "mode": "list",
+          "cachedResultName": "Buyers",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD/tblZ0ILrNSJmmQk2x"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "wants email consent ": false,
+            "BHK": "={{ $('Has Results?').item.json.bhk }}",
+            "Conversation Stage  ": "={{ $json.conversation_stage }}",
+            "name": "={{ $('Has Results?').item.json.name }}",
+            "Property Type ": "={{ $('Has Results?').item.json.property_type }}",
+            "chat ID": "={{ $('Has Results?').item.json.chat_id }}",
+            "id": "={{ $('Has Results?').item.json.user_id }}",
+            "city": "={{ $('Has Results?').item.json.location }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "BHK",
+              "displayName": "BHK",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Stage ",
+              "displayName": "Stage ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "Property Type ",
+              "displayName": "Property Type ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": " User Email",
+              "displayName": " User Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "wants email consent ",
+              "displayName": "wants email consent ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Conversation Stage  ",
+              "displayName": "Conversation Stage  ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "chat ID",
+              "displayName": "chat ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -2688,
+        2208
+      ],
+      "id": "b71c5554-e0a4-492f-b400-be0fa9c265ab",
+      "name": "Create or update a record3",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "FbWtMONkHmjNLHub",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Format Results').item.json.fields['chat ID'] }}",
+        "text": "={{ $('Present Found Properties').item.json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2496,
+        2208
+      ],
+      "id": "7346337c-219e-4036-8a8f-fe79725d49a2",
+      "name": "Send a text message3",
+      "webhookId": "11e66ff2-32b4-4232-ad98-c78de68dd869",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "parmarpriyal1603@gmail.com ",
+        "subject": "We’ve Found Properties Matching Your Requirements",
+        "emailType": "text",
+        "message": "=Dear {{ $json.result.chat.first_name }} {{ $json.result.chat.last_name }},\n\nWe’re happy to let you know that we’re actively tracking properties based on your preferences.\n\nwe find a property that matches what you’re looking for, we will share all the details to you right now with complete details, pricing, and location.\n\nYour current preferences:\n{{ $json.result.text }}\n\n\nYou can update or add your preferences anytime by simply replying to this email or messaging us on Telegram.\n\nOur goal is to help you find the right property quickly and with confidence.\n\nWarm regards,\n",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -2800,
+        1424
+      ],
+      "id": "b5e41deb-c3e8-4901-9de1-6b817e4c9cea",
+      "name": "Send a message",
+      "webhookId": "37de599f-554c-4d86-bbfa-993992c67bd1",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "4JxxwG6kwZSLGSho",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit?pli=1&gid=1029569359#gid=1029569359",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1996299082,
+          "mode": "list",
+          "cachedResultName": "Sheet5",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit#gid=1996299082"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ChatID": "={{ $json.result.chat.id }}",
+            "User Name ": "={{ $json.result.chat.first_name }}{{ $json.result.chat.last_name }}",
+            "Property Details ": "={{ $('Format Results').item.json.properties }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ChatID",
+              "displayName": "ChatID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "User Name ",
+              "displayName": "User Name ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "User Email",
+              "displayName": "User Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Property Details ",
+              "displayName": "Property Details ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -2304,
+        2208
+      ],
+      "id": "f7fdd853-c2b3-4fd6-9f2b-1a63fd2c0718",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "jYyBT144uOLlhO2o",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "app0Uho8WKMaMKeQD",
+          "mode": "list",
+          "cachedResultName": "Buyer Notify ",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblZ0ILrNSJmmQk2x",
+          "mode": "list",
+          "cachedResultName": "Buyers",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD/tblZ0ILrNSJmmQk2x"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "wants email consent ": false,
+            "BHK": 0,
+            "chat ID": 0
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true,
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "BHK",
+              "displayName": "BHK",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Stage ",
+              "displayName": "Stage ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Property Type ",
+              "displayName": "Property Type ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": " User Email",
+              "displayName": " User Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "wants email consent ",
+              "displayName": "wants email consent ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Conversation Stage  ",
+              "displayName": "Conversation Stage  ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "chat ID",
+              "displayName": "chat ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -3248,
+        2784
+      ],
+      "id": "5f665382-1c49-4276-bac7-07a25758335b",
+      "name": "Create or update a record4",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "FbWtMONkHmjNLHub",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Telegram Trigger').item.json.message.text }}",
+        "options": {
+          "systemMessage": "You are a polite, professional real-estate assistant.\n\nThe user has agreed to receive property details by email, but their email address is not yet available.\n\nYour task is to ask the user to share their email address in a friendly and clear way.\n\nGuidelines:\n\nAsk only for the email address (do not ask for other details).\n\nKeep the message short, polite, and helpful.\n\nClearly explain that the email is needed to send property details.\n\nIf the user sends an invalid email, politely ask them to re-enter a valid one.\n\nDo not assume or invent an email address.\n\nDo not include technical terms or system explanations.\n\nExample tone: friendly, supportive, professional."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -4144,
+        2064
+      ],
+      "id": "78f0a80a-47c0-44bd-85ec-84932920ea60",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -4144,
+        2272
+      ],
+      "id": "e8b9da4e-6623-4676-8d3b-fc4bdd194f4d",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Intent').item.json.chat_id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -3792,
+        2064
+      ],
+      "id": "9dcfaf2b-3ce5-4eb6-8fb1-f7396833ae6d",
+      "name": "Send a text message4",
+      "webhookId": "cab16378-cbb7-403d-8cc6-b7aca045a97a",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "app76mYynaLeqJCBE",
+          "mode": "list",
+          "cachedResultName": "n8n Real Estate Testing flow",
+          "cachedResultUrl": "https://airtable.com/app76mYynaLeqJCBE"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblrMCDVRCD1poIOV",
+          "mode": "list",
+          "cachedResultName": "Sheet5",
+          "cachedResultUrl": "https://airtable.com/app76mYynaLeqJCBE/tblrMCDVRCD1poIOV"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "User Name ": "={{ $('Parse Intent').item.json.name }}",
+            "User Email": "={{ $('Parse Intent').item.json.email }}",
+            "ChatID": "={{ $json.ChatID }}",
+            "Property Details ": "={{ $json['Property Details '] }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true
+            },
+            {
+              "id": "ChatID",
+              "displayName": "ChatID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "User Name ",
+              "displayName": "User Name ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "User Email",
+              "displayName": "User Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Property Details ",
+              "displayName": "Property Details ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -3472,
+        1424
+      ],
+      "id": "e1c6bd6a-4288-4b9a-9feb-adb6f54c518d",
+      "name": "Create or update a record1",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "FbWtMONkHmjNLHub",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Parse Intent').item.json.intent }}",
+                    "rightValue": "=PROVIDE_EMAIL",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "ca5c2ff8-451d-46eb-a151-04a443768556"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "e25c0e5d-7e2b-4da6-b290-b36a222fc267",
+                    "leftValue": "={{ $('Parse Intent').item.json.intent }}",
+                    "rightValue": "EMAIL_CONSENT_YES",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "fddf0bda-2ef1-4ea0-9ad1-1c86819084b8",
+                    "leftValue": "={{ $('Parse Intent').item.json.intent }}",
+                    "rightValue": "=GREETING",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "442bcdfb-fa03-4e70-81e5-a5ccc52caaa8",
+                    "leftValue": "={{ $('Parse Intent').item.json.intent }}",
+                    "rightValue": "SEARCH_PROPERTY",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -4528,
+        2208
+      ],
+      "id": "53290823-fa9c-4634-8fec-fc4832d60d9f",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('Parse Message').item.json.message }}",
+        "options": {
+          "systemMessage": "You are a conversational real-estate assistant chatting with a user on Telegram/WhatsApp.\n\nYou may receive internal, structured, or instructional messages that include details like:\n\nUser name, intent, or stage\n\nWhat information is already collected\n\nWhat information is missing\n\nTask instructions written in markdown or bullet points\n\n⚠️ These messages are NOT meant to be shown to the user.\n\nYour task:\n\nIgnore all internal formatting, labels, markdown, variables, and instructions\n\nExtract only the next missing piece of information\n\nSend a simple, natural, human-friendly message asking for that missing detail\n\nRules:\n\nAsk for only ONE missing detail at a time\n\nDo NOT repeat collected information\n\nDo NOT show lists like “What we have / What we need”\n\nDo NOT mention intent, stages, or system terms\n\nKeep the message short and conversational\n\nUse a friendly, professional tone\n\nIf the missing information is property type, ask clearly with 2–3 common examples.\n\nOutput must be plain text only, suitable for a chat app."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -3104,
+        2784
+      ],
+      "id": "e46f408c-03c8-413d-b18e-8d81551b3ff4",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3104,
+        2976
+      ],
+      "id": "512bfcdd-f75e-45ca-ad9b-a8bac6b09fe6",
+      "name": "Groq Chat Model1",
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Message').item.json.chat_id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2816,
+        2784
+      ],
+      "id": "eece0006-35db-45d1-86b9-e5942d137ad4",
+      "name": "Send a text message5",
+      "webhookId": "1705a1d1-c2a7-4ada-9935-170a1fc0b6d0",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "base": {
+          "__rl": true,
+          "value": "app0Uho8WKMaMKeQD",
+          "mode": "list",
+          "cachedResultName": "Buyer Notify ",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblZ0ILrNSJmmQk2x",
+          "mode": "list",
+          "cachedResultName": "Buyers",
+          "cachedResultUrl": "https://airtable.com/app0Uho8WKMaMKeQD/tblZ0ILrNSJmmQk2x"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "wants email consent ": false,
+            "chat ID": "={{ $json.chat_id }}",
+            "BHK": "={{ $json.bhk }}",
+            "city": "={{ $json.location }}",
+            "Property Type ": "={{ $json.property_type }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "chat ID",
+              "displayName": "chat ID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "city",
+              "displayName": "city",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "BHK",
+              "displayName": "BHK",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Stage ",
+              "displayName": "Stage ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Property Type ",
+              "displayName": "Property Type ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": " User Email",
+              "displayName": " User Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "wants email consent ",
+              "displayName": "wants email consent ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "boolean",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Conversation Stage  ",
+              "displayName": "Conversation Stage  ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -4784,
+        2240
+      ],
+      "id": "00ea6c44-8c88-486a-9fc2-5c2416672a2c",
+      "name": "Store Property Inquiry",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "FbWtMONkHmjNLHub",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit?pli=1&gid=1996299082#gid=1996299082",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1996299082,
+          "mode": "list",
+          "cachedResultName": "Sheet5",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit#gid=1996299082"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "ChatID",
+              "lookupValue": "={{ $json.output }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -3952,
+        1712
+      ],
+      "id": "3fd35b40-b59a-468b-8767-f4c0cf63f7f9",
+      "name": "Get row(s) in sheet",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "jYyBT144uOLlhO2o",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.fields['Property Details '] }}",
+        "options": {
+          "systemMessage": "=You are a text formatter.\n{{ $json.fields['User Name '] }}\n{{ $json.fields['User Email'] }}\n\nYou will receive property data in JSON or array format.\n\nYour task:\n- Convert ALL received property data into SIMPLE, PLAIN TEXT.\n- The output MUST start with this exact introductory line:\n\nHere are the property details based on your preferences that we have shared with you via email:\n\n- Do NOT return JSON.\n- Do NOT explain, rewrite, or suggest improvements.\n- Do NOT add any extra text before or after the formatted output.\n- Do NOT use code blocks.\n- Do NOT use bullet symbols other than \"-\".\n\nRules:\n- If a value is missing or null, write \"Not specified\".\n- Always include all available properties.\n- Handle multiple properties by repeating the same structure for each property.\n\nOutput format MUST be EXACTLY like this:\n\nHere are the property details based on your preferences that we have shared with you via email:\n\nProperty Details:\n- BHK: <value>\n- Type: <value>\n- Location: <value>\n- Area: <value> sq ft\n- Price: ₹<value> Cr\n- Status: <value>\n- Agent: <value>\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -3264,
+        1424
+      ],
+      "id": "adecfe47-0aea-4e20-b14a-95b9d3742c32",
+      "name": "AI Agent2"
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3408,
+        1632
+      ],
+      "id": "602e9d77-1a62-4b0a-8a15-53e20ba2d0eb",
+      "name": "Groq Chat Model2",
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "id": "68666dec-5526-4c9a-8821-fd4d879debd7",
+      "name": "Groq Intent",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -5296,
+        2400
+      ],
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit?pli=1&gid=1996299082#gid=1996299082",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1996299082,
+          "mode": "list",
+          "cachedResultName": "Sheet5",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1i2xDZA_5GRxA4oKDVWa36G0CVpdByZ65qjImS4gKKFg/edit#gid=1996299082"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "User Email": "={{ $('Parse Intent').item.json.email }}",
+            "ChatID": "={{ $json.fields['chat ID'] }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ChatID",
+              "displayName": "ChatID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "User Name ",
+              "displayName": "User Name ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "User Email",
+              "displayName": "User Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Property Details ",
+              "displayName": "Property Details ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -4384,
+        1712
+      ],
+      "id": "89c9a2ae-1506-4e6b-bfee-a7ec0dc9b487",
+      "name": "Append row in sheet1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "jYyBT144uOLlhO2o",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4f3d69b3-39be-4aaa-837f-f283679ede6f",
+              "leftValue": "={{ $json['Property Details '] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -3728,
+        1696
+      ],
+      "id": "e1c0f5be-1fc9-46ad-b6d5-efdb3cff296d",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Intent').item.json.chat_id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -2976,
+        1792
+      ],
+      "id": "d68a2a5f-4971-4a2d-8790-e4dddc1fb481",
+      "name": "Send a text message",
+      "webhookId": "41602cac-3707-4a63-9a28-b0a1a33c4a3f",
+      "credentials": {
+        "telegramApi": {
+          "id": "Xls6IA9SOfv5suva",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "parmarpriyal1603@gmail.com ",
+        "subject": "We’ve Found Properties Matching Your Requirements",
+        "emailType": "text",
+        "message": "=Dear {{ $json.result.chat.first_name }} {{ $json.result.chat.last_name }},\n\nWe’re happy to let you know that we’re actively tracking properties based on your preferences.\n\nWe don't find a property that matches what you’re looking for, we will share all the details if we find all the details to you with complete details, pricing, and location.\n\nYou can update or add your preferences anytime by simply replying to this email or messaging us on Telegram.\n\nOur goal is to help you find the right property quickly and with confidence.\n\nWarm regards,\n",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -2800,
+        1792
+      ],
+      "id": "18c60bea-f645-457b-b509-0fbe45a902fc",
+      "name": "Send a message1",
+      "webhookId": "37de599f-554c-4d86-bbfa-993992c67bd1",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "4JxxwG6kwZSLGSho",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": {
+          "__rl": true,
+          "value": "app76mYynaLeqJCBE",
+          "mode": "list",
+          "cachedResultName": "n8n Real Estate Testing flow",
+          "cachedResultUrl": "https://airtable.com/app76mYynaLeqJCBE"
+        },
+        "table": {
+          "__rl": true,
+          "value": "tblrMCDVRCD1poIOV",
+          "mode": "list",
+          "cachedResultName": "Sheet5",
+          "cachedResultUrl": "https://airtable.com/app76mYynaLeqJCBE/tblrMCDVRCD1poIOV"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "User Name ": "={{ $('Parse Intent').item.json.name }}",
+            "User Email": "={{ $('Parse Intent').item.json.email }}",
+            "ChatID": "={{ $json.ChatID }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": true
+            },
+            {
+              "id": "ChatID",
+              "displayName": "ChatID",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "User Name ",
+              "displayName": "User Name ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "User Email",
+              "displayName": "User Email",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "Property Details ",
+              "displayName": "Property Details ",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [
+        -3472,
+        1792
+      ],
+      "id": "8fb5665f-e817-499e-ba14-8b51895d48ef",
+      "name": "Create or update a record",
+      "credentials": {
+        "airtableTokenApi": {
+          "id": "FbWtMONkHmjNLHub",
+          "name": "Airtable Personal Access Token account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=",
+        "options": {
+          "systemMessage": "=You are a text formatter.\n{{ $json.fields['User Name '] }}\n{{ $json.fields['User Email'] }}\n\nYou will receive property data in JSON or array format.\n\nYour task:\n- Convert ALL received property data into SIMPLE, PLAIN TEXT.\n- The output MUST start with this exact introductory line:\n\nHere are the property details based on your preferences that we have shared with you via email:\n\n- Do NOT return JSON.\n- Do NOT explain, rewrite, or suggest improvements.\n- Do NOT add any extra text before or after the formatted output.\n- Do NOT use code blocks.\n- Do NOT use bullet symbols other than \"-\".\n\nRules:\n- If a value is missing or null, write \"Not specified\".\n- Always include all available properties.\n- Handle multiple properties by repeating the same structure for each property.\n\nOutput format MUST be EXACTLY like this:\n\nHere are the property details based on your preferences that we have shared with you via email:\n\nProperty Details:\n- BHK: <value>\n- Type: <value>\n- Location: <value>\n- Area: <value> sq ft\n- Price: ₹<value> Cr\n- Status: <value>\n- Agent: <value>\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -3264,
+        1792
+      ],
+      "id": "15aa983b-737a-4ac4-a02b-4033c387c5f1",
+      "name": "AI Agent3"
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -3408,
+        2000
+      ],
+      "id": "c506966e-8a8e-49e6-aa69-2fe44088127c",
+      "name": "Groq Chat Model3",
+      "credentials": {
+        "groqApi": {
+          "id": "2WAgmfNX6zUyWxOA",
+          "name": "Groq account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "AI Intent Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Intent Classifier": {
+      "main": [
+        [
+          {
+            "node": "Parse Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Intent": {
+      "main": [
+        [
+          {
+            "node": "Store Property Inquiry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Greeting?": {
+      "main": [
+        [
+          {
+            "node": "Ready to Search?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Greeting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Greeting": {
+      "main": [
+        [
+          {
+            "node": "Save to Airtable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ready to Search?": {
+      "main": [
+        [
+          {
+            "node": "Search Properties",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collect Missing Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Missing Info": {
+      "main": [
+        [
+          {
+            "node": "Add Output from Collect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Output from Collect": {
+      "main": [
+        [
+          {
+            "node": "Create or update a record4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Collect": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Collect Missing Info",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Properties": {
+      "main": [
+        [
+          {
+            "node": "Format Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Results": {
+      "main": [
+        [
+          {
+            "node": "Has Results?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Results?": {
+      "main": [
+        [
+          {
+            "node": "Present Found Properties",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Present No Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Present Found Properties": {
+      "main": [
+        [
+          {
+            "node": "Mark Shown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Present": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Present Found Properties",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Present No Results": {
+      "main": [
+        [
+          {
+            "node": "Mark None Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq None": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Present No Results",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Shown": {
+      "main": [
+        [
+          {
+            "node": "Create or update a record3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark None Found": {
+      "main": [
+        [
+          {
+            "node": "Create or update a record2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [],
+        []
+      ]
+    },
+    "Confirm Email Saved": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask for Email": {
+      "main": [
+        []
+      ]
+    },
+    "Save to Airtable": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create or update a record2": {
+      "main": [
+        [
+          {
+            "node": "Send a text message2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create or update a record3": {
+      "main": [
+        [
+          {
+            "node": "Send a text message3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message1": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message2": {
+      "main": [
+        []
+      ]
+    },
+    "Send a text message3": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        []
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send a text message4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create or update a record1": {
+      "main": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Greeting?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ready to Search?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Send a text message5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create or update a record4": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Property Inquiry": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent2": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Intent": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Intent Classifier",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet1": {
+      "main": [
+        [
+          {
+            "node": "Confirm Email Saved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Create or update a record1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create or update a record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create or update a record": {
+      "main": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent3": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "2f8f1abf-eff1-4d76-8a5a-eea6fe9d9e5d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "1c7c8452129091938a36552db6f46f7fafd19adf33049199f18c47b565c63970"
+  },
+  "id": "Ov07CdthgCR4wsSb",
+  "tags": []
+}
