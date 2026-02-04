@@ -8,7 +8,7 @@ The bot understands natural language messages, identifies user intent, collects 
 
 This project demonstrates real-world automation skills combining AI, workflows, databases, and messaging platforms.
 
-Project Goals
+**Project Goals**
 
 This project was built to:
 
@@ -20,9 +20,10 @@ Build a real-world business automation use case
 
 Practice lead management and data persistence
 
-Create a portfolio-ready automation project for jobs and internships
+Create a portfolio-ready automation projects.
 
-How the Workflow Works
+**How the Workflow Works**
+
 1. Telegram Trigger
 
 Listens for incoming messages from users
